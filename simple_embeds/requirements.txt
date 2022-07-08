@@ -1,0 +1,6 @@
+This module have the following library requirements:
+1. numpy
+2. pandas
+3. tqdm
+4. scipy
+5. wordninja
