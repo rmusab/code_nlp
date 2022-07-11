@@ -2,7 +2,6 @@ import numpy as np
 from numpy import savetxt
 from numpy import loadtxt
 import pandas as pd
-from sklearn import preprocessing
 from tqdm import tqdm
 import pickle
 from scipy.sparse.linalg import svds
@@ -10,6 +9,7 @@ from numpy.linalg import norm
 from collections import Counter
 import wordninja
 import argparse
+from word_mover_distance import model
 
 
 # Cosine distance
@@ -91,6 +91,47 @@ def find_closest_words(word, voc, w, closest_num=10):
     return word_id, result
 
 
+def load_training_corpus():
+    with open('labels.pickle', 'rb') as f:
+        labels = pickle.load(f)
+    return labels
+
+
+def build_tag_vocabulary(labels):
+    print('Building a vocabulary of tags...')
+    tags = set()
+    for label in tqdm(labels, total=len(labels)):
+        tags.add(' '.join(label))
+    result = list(tags)
+    with open('tags.pickle', 'wb') as f:
+        pickle.dump(result, f)
+    print(f'A tag vocabulary of length {len(result)} has been built and saved.')
+    print('')
+    return result
+
+
+def load_tag_vocabulary():
+    with open('tags.pickle', 'rb') as f:
+        tags = pickle.load(f)
+    return tags
+
+
+def initialize_wmd_model(voc, w):
+    word_embeds = {voc[i]: w[i] for i in range(len(voc))}
+    wmd_model = model.WordEmbedding(model=word_embeds)
+    return wmd_model
+
+
+def find_wmd_distance(wmd_model, label1, label2):
+    return wmd_model.wmdistance(label1.split(), label2.split())
+
+
+def find_closest_labels(label, tags, wmd_model, closest_num=10):
+    distances = [ (j, find_wmd_distance(wmd_model, label, tags[j])) for j in range(len(tags)) ]
+    min_dist_names = [ f"'{tags[j]}'" for i, (j, d) in enumerate(sorted(distances, key = lambda item: item[1])) if i < closest_num ]
+    print(f"List of closest labels to '{label}': " + ', '.join(min_dist_names))
+
+
 def main(args):
     if args.build:
         df = pd.read_csv(args.df_path)
@@ -100,30 +141,59 @@ def main(args):
         u, s, v = svds(cooccur_mtx, k=args.embed_dim)
         w = np.dot(u, np.diag(0.5 * s))  # extract the embedding matrix
         save_embedding_mtx(w)  # save the embedding matrix
+        labels = load_training_corpus()  # load the database of labels
+        tags = build_tag_vocabulary(labels)  # build a vocabulary of tags, i.e. unique labels
+    elif args.label:
+        tags = load_tag_vocabulary()
+        voc = read_tokens()  # load the vocabulary
+        w = load_embedding_mtx()  # load the embedding matrix
+        wmd_model = initialize_wmd_model(voc, w)
+        find_closest_labels(args.input, tags, wmd_model, args.closest_num)
+    elif args.labeld:
+        voc = read_tokens()  # load the vocabulary
+        w = load_embedding_mtx()  # load the embedding matrix
+        wmd_model = initialize_wmd_model(voc, w)
+        print(find_wmd_distance(wmd_model, args.input1, args.input2))
     else:
         # cooccur_mtx = load_cooccur_mtx()  # load the cooccurrence matrix
-        voc = read_tokens()
+        voc = read_tokens()  # load the vocabulary
         w = load_embedding_mtx()  # load the embedding matrix
-        _, result = find_closest_words(args.input_token, voc, w, args.closest_num)
+        _, result = find_closest_words(args.input, voc, w, args.closest_num)
         print(result)
 
 
-parser = argparse.ArgumentParser(description='In the preprocessing regime (build is True): extract tokens from DF_PATH, \
+parser = argparse.ArgumentParser(description='In the preprocessing regime (BUILD is True): extract tokens from DF_PATH, \
                                 build vocabulary, build token cooccurrence matrix, take its SVD to obtain token embeddings \
-                                of dimension EMBED_DIM, save the results. Provide -p and -d arguments for that case. \
-                                In the inference regime (build is False): find CLOSEST_NUM (default = 10) closest tokens to the given \
-                                token INPUT_TOKEN. Provide -t and -l arguments.')
+                                of dimension EMBED_DIM, build tag vocabulary, save the results. Provide -p and -d parameters for that case. \
+                                In the inference regime (BUILD is False): find CLOSEST_NUM (default = 10) closest tokens to the given \
+                                token INPUT (provide -i and -n parameters); if LABEL is true, then find CLOSEST_NUM (default = 10) \
+                                labels to the given label INPUT (provide -i and -n parameters); if LABELD is true, then find the WMD \
+                                distance between the labels INPUT1 and INPUT2 (provide -i1 and -i2 parameters).')
 parser.add_argument('-b', '--build', action='store_true', default=False,
-                    help='build and save vocabulary along with token embeddings (default: infer from the given token INPUT_TOKEN)')
+                    help='build and save vocabulary along with token embeddings and tags (default: find closest tokens to the given INPUT_TOKEN)')
+parser.add_argument('-l', '--label', action='store_true', default=False,
+                    help="find closest labels to the given one using the Word Mover's Distance (default: find closest tokens to the given INPUT_TOKEN)")
+parser.add_argument('-ld', '--labeld', action='store_true', default=False,
+                    help="find the distance between two labels INPUT1 and INPUT2 using the Word Mover's Distance (default: find closest tokens to the given INPUT_TOKEN)")
 parser.add_argument('-p', '--path', dest='df_path',
                     help='path to the csv file containing method names line by line')
 parser.add_argument('-d', '--dim', dest='embed_dim', type=int,
                     help='embedding dimension')
-parser.add_argument('-t', '--token', dest='input_token',
-                    help='input token to make inference on')
-parser.add_argument('-l', '--length', dest='closest_num', type=int, default=10,
-                    help='length of the sequence of closest tokens')
+parser.add_argument('-i', '--input', dest='input',
+                    help='input token or label')
+parser.add_argument('-i1', '--input1', dest='input1',
+                    help='first input label')
+parser.add_argument('-i2', '--input2', dest='input2',
+                    help='second input label')
+parser.add_argument('-n', '--clnum', dest='closest_num', type=int, default=10,
+                    help='length of the returned sequence of closest tokens / labels')
 args = parser.parse_args()
 
 if __name__ == '__main__':
     main(args)
+
+#exec(open("process_tokens.py").read())
+
+# Some results:
+# List of closest labels to 'get token position': 'get token position', 'get label position', 'get token offset', 'get location token', 'get token location', 'get row position', 'get position parent', 'get parent position', 'get icon position', 'get token icon'
+# List of closest labels to 'build word tree': 'build symbol tree', 'build execution tree', 'build final tree', 'build binary tree', 'build debug tree', 'build leaf tree', 'build dependency tree', 'build interval tree', 'build hierarchy tree', 'build composite tree'
